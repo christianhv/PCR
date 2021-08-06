@@ -463,7 +463,7 @@ class PCR:
     def __calculate_search_heuristic(self,learning_set, rule_complex):
 
         rule_packed = {}
-        print("[rule_complex]", rule_complex)
+        print("[rule_complex]:{}".format(rule_complex))
         covered_indexes = self.__find_covered_examples(learning_set, rule_complex)
         print("|Covered|", covered_indexes)
         if covered_indexes:
@@ -507,7 +507,9 @@ class PCR:
 
             #print("correct", rule_packed[PCR.correct_cov], "\n\n")
         return rule_packed
-
+    
+    def __define_final_prototype(self,current_prototype):
+        print("define final prototype")
 
 # region Calculate Classification Error
     def __calculate_rule_classify_error(self, tdata, rule):
@@ -862,4 +864,4 @@ if __name__ == '__main__':
     #PCR_instance.test_modify_learning_set()
 
 
-#endregion1
+#endregion 
