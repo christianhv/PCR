@@ -13,6 +13,7 @@ import operator
 import time
 from operator import itemgetter
 import logging
+import warnings
 
 #endregion
 
@@ -32,9 +33,9 @@ class PCR:
 
     # modification types of examples weights
     mty_add = "add"
-    mty_rep = "replace"
+    mty_repl = "replace"
     mty_sub = "substract"
-    mty_mul = "multiplication"
+    mty_mult = "multiplication"
 
     # we identify two types of attributes
     nominal = "string"
@@ -48,72 +49,164 @@ class PCR:
     #search heuristic methods
     srch_heu_CN2 = "CN2"
     srch_heu_WRAcc = "WRAcc"
-    srch_heu_Other = "Other"
+    srch_heu_other = "Other"
 
     # examples elimination type
     mmthd_err_weight_cov = "Err-Weight-Covering"
     mmthd_std_cov = "Standard-Covering"
 
     #region initializing PCR
-    def __init__(self, training_data, test_data, target, target_weight=1.0):
-        #logging.basicConfig(filename='test.log', filemode='w', format='%(name)s - %(levelname)s - %(message)s')
+    def __init__(self,
+                 training_data,
+                 test_data,
+                 target=[],
+                 target_weight=0.0,
+                 multi_direction=False,
+                 maximum_targets=2,
+                 search_heuristic="CN2",
+                 modifying_method="Standard-Covering",
+                 covering_err_weight = 0.0, #if zero the correct covered will be deleted
+                 covering_weight_threshold = 0.4,
+                 minimum_covered = 3,
+                 coverage_weight=0.0,
+                 distance_weight=0.0,
+                 dissimilarity_weight=0.0,
+                 maximize_heuristic_weight="coverage"  #Only used when the search_heuristic is other
+                ):
+        warnings.formatwarning = lambda msg, *args, **kwargs: f'{msg}\n'
+
         self.training_data = training_data.sort_index()
-        print(self.training_data.index)
+        logging.warning(self.training_data.index)
         self.training_data = self.training_data.reset_index(drop=True)
         logging.warning("SORTED:\n{}".format(self.training_data))
         self.test_data = test_data
         logging.warning("TEST:\n{}".format(self.test_data))
-        # self.highest_idx = np.asscalar(self.training_data.tail(1).index.values.astype(int))
-        print(self.training_data.index)
 
-        print("df:",self.training_data.index[[1,3]])
-        #self.training_data.drop(self.training_data.index[[1,3]], inplace=True)
-
-        print(self.training_data)
-        #return None
+        # Setting indexes of the training data
         self.all_td_indexes = self.training_data.index.values.tolist()
         self.highest_idx = self.all_td_indexes[len(self.all_td_indexes)-1]
-
-        if type(target) != list:
-            print("not a list")
-            self.target = [target]
-        else:
-            self.target = target
-        self.no_target = len(self.target)
-
         self.column_list = list(self.training_data.columns)
         self.td_dtypes = self.__set_data_types()
-        self.global_unique_values = self.__get_unique_values(self.training_data)
+        self.global_unique_values = self.__get_unique_values(
+            self.training_data)
+        self.td_weights = self.__set_td_weights()
+
+
+
+        if multi_direction:
+            self.target = []
+            self.no_target = 0.0
+            self.max_num_targets = maximum_targets
+            self.tau_target_weight = 0.0
+            if target_weight > 0:
+                warnings.warn('''
+                            | In multi-direction all attributes have the same weight         |
+                            | The weight provided is ignored                                 |''',
+                              stacklevel=2)
+            if (len(target)) > 0:
+                warnings.warn('''
+                            | If multi-direction=True, no target is taken into account       |
+                            | The number of targets will be automatically generated          |
+                            | Number of targets will differ by rule, until maximum           |
+                            | provided default=2                                             |
+                            | If you want to provide target change multi-direction to False  |''',
+                              stacklevel=2)
+        else:
+            if type(target) != list:
+                raise ValueError(
+                    '| Target not a list. Target must be a list with at least one element|'
+                )
+            if len(target) < 1:
+                raise ValueError(
+                    '<<If multi-direction=False Target must be provided>>')
+            if target_weight == 0:
+                warnings.warn('''
+                            | It is recommended to give weight to target attributes.         |
+                            | Now assigning value 1 by default                               |
+                            ''')
+                self.tau_target_weight = 1.0
+            else:
+                self.tau_target_weight = target_weight
+
+            self.target = target
+            self.no_target = len(self.target)
+            self.max_num_targets = 0
 
         #All the weights need to tune the algorithm
-        self.alpha_coverage_hweight = 1.0
-        self.beta_distance_hweight = 0.0  #in original experiments is not used
-        self.gamma_dissimilarity_hweight = 0.0 #in original experiments is not used
+        self.search_heuristic = search_heuristic
+        if search_heuristic == PCR.srch_heu_CN2:
+            warnings.warn('''
+                            | In CN2 search heuristic, all heuristic weights are set to zero |
+                            | If you provide some arguments, they will be ignored            |
+                            | Pleaser try with "Other" to modify heuristic weights           |''',
+                          stacklevel=2)
 
-        self.tau_target_weight = target_weight
+            self.dispersion_off = 1.0
+            self.alpha_coverage_hweight = coverage_weight
+            self.beta_distance_hweight = distance_weight  #in original experiments is not used
+            self.gamma_dissimilarity_hweight = dissimilarity_weight
+        elif search_heuristic == PCR.srch_heu_WRAcc:
+            warnings.warn('''
+                            | In WRAcc search heuristic the generic dispersion is used and   |
+                            | coverage weight is set to 1                                    |
+                            | If you provide some arguments, they will be ignored            |
+                            | Pleaser try with "Other" to modify heuristic weights           |''',
+                          stacklevel=2)
+            self.dispersion_off = 0.0 ####==> dispersion for WRAcc is calculated below <===###
+            self.alpha_coverage_hweight = 1.0
+            self.beta_distance_hweight = 0.0  #in original experiments is not used
+            self.gamma_dissimilarity_hweight = 0.0
+        elif search_heuristic == PCR.srch_heu_other:
+            self.dispersion_off = 0.0
+            self.alpha_coverage_hweight = coverage_weight
+            self.beta_distance_hweight = distance_weight
+            self.gamma_dissimilarity_hweight = dissimilarity_weight
 
-        self.zeta_covering_err_weight = 0.4
-        self.eps_cov_weight_err_thld = 0.5
+
+        self.modifying_method = modifying_method
+        self.zeta_covering_err_weight = covering_err_weight
+        self.eps_cov_weight_err_thld = covering_weight_threshold
+
+        self.modifying_method = modifying_method
         self.minimum_covered = 3
-
         self.maximal_number_of_rules = 100
+
+        # Is it multi directional
+        print("Multi direction:{}".format(multi_direction))
+        print("Target:{} no._targets:{} max_no_targets:{}".format(
+            self.target, self.no_target, self.max_num_targets))
+        print("Tau:{}".format(self.tau_target_weight))
+
+        print("disp:{} cov:{} dist:{} diss:{} ".format(
+            self.dispersion_off,
+            self.alpha_coverage_hweight,
+            self.beta_distance_hweight,  #in original experiments is not used
+            self.gamma_dissimilarity_hweight))
+
+        print("mod_methd:{} error_weight:{}  err_thld: {}".format(
+            self.modifying_method, self.zeta_covering_err_weight,
+            self.eps_cov_weight_err_thld))
 
         ### The structures below need some of the structures above
         # setting the weights
+        # attributes weights need to know the weight for the target
         self.attributes_weights = self.__set_default_attributes_weights()
-        self.td_weights = self.__set_td_weights()
-        print(len(self.td_weights))
-        print(self.td_weights)
+        if search_heuristic == PCR.srch_heu_WRAcc:
+            self.dispersion_off = self.__calculate_dispersion_of(
+                self.training_data)[0]
+            print("disp Off:{}".format(self.dispersion_off))
+
         self.selectors = self.__get_selectors(multi_direction=False)
         logging.warning("SELECTORS:{}".format(self.selectors))
         #setting the generic dispersion
         #we need the type of data and the column list
         #self.dispersion_off = self.__calculate_dispersion_of(self.training_data)[0]
-        self.dispersion_off = 0
         #setting the generic prototype
         self.td_prototype = self.__set_td_prototype()
         self.rule_set = []
-        ci = [1,1200]
+
+        # creating arrays of covered indexes by the targets.
+        # to avoid check everytime the covered examples by target values
         self.target_val_idxs = {}
         for k in self.target:
             temp = {}
@@ -122,33 +215,17 @@ class PCR:
                 temp[k]=[value]
                 idxs = self.__find_covered_examples(self.training_data, temp)
                 temp2[value] = idxs
-                print(value,":idxs:",idxs)
+                #print(value,":idxs:",idxs)
             self.target_val_idxs[k] = temp2
 
         logging.warning("target indexes by value")
         logging.warning(self.target_val_idxs)
-        logging.warning(self.dispersion_off)
-        logging.warning(self.td_prototype)
+        logging.warning("disp Off:{}".format(self.dispersion_off))
+        logging.warning("generic proto:{}".format(self.td_prototype))
 
 #endregion
 
 #region some tests
-    def check_rule(self):
-        rule = {'sex': ['women'], 'class': ['1st class'], 'age': ['adults']}
-
-        for column in self.column_list:
-            print("column:{} value rule:{}".format(column, rule.get(column)))
-
-
-    def test_modify_learning_set(self):
-        print("modifying check")
-        indexes = self.training_data.index.values.tolist()
-        targets_covered = [1] * len(indexes)
-        #print(indexes, "\n", targets_covered)
-        #print(self.td_weights)
-        self.__modify_learning_set(indexes, targets_covered)
-        print(self.td_weights)
-
     def __find_best_complex(self, learning_set, limit_best=6, limit_beam=10):
         empty_star = False
         best_candidates = []
@@ -187,7 +264,7 @@ class PCR:
                 empty_star = True
         return best_candidates
 
-    def test_find_best_complex(self, limit_rule_set=5, error_threshold=0.4):
+    def test_find_best_complex(self, limit_rule_set=5, error_threshold=0.3):
         stop_criterion = True
         poorest_ruleset_error = 1.0
         while stop_criterion:
@@ -260,93 +337,16 @@ class PCR:
 
         self.rule_set = [rule for rule in self.rule_set if rule[PCR.rl_classify_error] < error_threshold]
 
-    def test_specialization(self):
-        print("test specialization")
-        complexes_to_specialize = []
-        empty = False
-        best_five= []
-        best_class_error =[]
-        exist_candidate = True
-        while not self.training_data.empty or exist_candidate:
-            print("Out second loop")
-            empty= False
-            best_five= []
-            best_class_error =[]
-            while not empty:
-                specialized = self.__specialize_complex(complexes_to_specialize)
-
-                if not specialized:
-                    empty = True
-                else:
-                    for sp in specialized:
-                        print("sp", sp)
-                        rule_packed = self.__calculate_search_heuristic(self.training_data, sp)
-                        logging.warning("just info:{} - {}".format(rule_packed[PCR.rl_antecedent],rule_packed[PCR.rl_srch_heu_value] ))
-                        if len(rule_packed[PCR.rl_cov_idxs]) > self.minimum_covered:
-                            self.__calculate_rule_classify_error(self.test_data, rule_packed)
-                            best_five.append(rule_packed)
-                            best_class_error.append(rule_packed)
-                        else:
-                            logging.warning("Rule: {} no covered minimum".format(rule_packed[PCR.rl_antecedent]))
-                        print("|", rule_packed[PCR.rl_antecedent], "\n", len(best_five))
-
-
-                        best_five = sorted(best_five, key=itemgetter(PCR.rl_srch_heu_value), reverse=True)
-                        best_class_error = sorted(best_class_error, key=itemgetter(PCR.rl_classify_error), reverse=False)
-                        best_five = best_five[0:5]
-                        best_class_error = best_class_error[0:3]
-
-
-
-
-                        logging.warning("By SH")
-                        for b in best_five:
-                            logging.warning(b)
-
-                        logging.warning("By CL error")
-                        for bc in best_class_error:
-                            indexes_fweights = list(bc[PCR.rl_correct_cov].keys())
-                            new_weights = list(bc[PCR.rl_correct_cov].values())
-                            if not self.training_data.empty:
-                                self.__modify_learning_set(indexes_fweights, new_weights)
-                            logging.warning(bc)
-
-
-                complexes_to_specialize = [rule[PCR.rl_antecedent] for rule in best_five]
-
-
-
-    def test_delete(self):
-        for i in range(0, 8):
-            print(i)
-            #ind = (self.training_data.head(1).index.values.tolist())
-            ind = (self.training_data.head(1).index.item())
-            print(type(ind))
-            #ind += i
-            a_list = list(range(ind, ind+10))
-            to = [x for x in a_list if x<(ind+5)]
-            print(a_list, to)
-            self.test_filtering(to)
-
-
-    def test_filtering(self, to_delete):
-        #new_Learning = self.training_data.loc[[3,4],:]
-        #new_Learning = self.training_data.drop(to_delete, axis=0)
+    def __remove_covered_examples(self, to_delete):
+        current_indexes = self.training_data.index.values.tolist()  # we try to find if the examples still exist in the training set and were not deleted by other rule in the iteration
+        true_delete = [idx for idx in to_delete if idx in current_indexes]
         logging.warning("index to delete:\n{}".format(to_delete))
-        #self.training_data = self.training_data.drop(self.training_data.index[to_delete])
-        #print("df:",self.training_data.index[to_delete].item())
-
-        #rows = self.training_data.index[to_delete]
-        #print(rows)
-
         try:
-            self.training_data.drop(index = to_delete, inplace=True)
-            print(self.training_data)
+            self.training_data.drop(index=true_delete, inplace=True)
+            logging.warning(self.training_data)
             logging.warning("correct deletion:\n{}".format(self.training_data))
         except IndexError:
-            print("IndexError")
-        #print(self.training_data)
-
+            logging.warning("IndexError")
 
 #endregion
 
@@ -397,14 +397,11 @@ class PCR:
         targets_covered_by_new_rule_in_set = list(map(operator.truediv,targets_covered_by_new_rule_in_set, no_targets)) # divide all the covered targets in each example by the number of targets
         targets_covered_by_new_rule_in_set =list(map(operator.mul, targets_covered_by_new_rule_in_set, modifier)) #multiply the modifier by the targets covered/by number of targets
         targets_covered_by_new_rule_in_set = list(map(operator.add, targets_covered_by_new_rule_in_set, uno)) # add 1 to the result before, most of the time lower than 1 if zero then the final modifier is zero and example is immediately deleted
-        self.modify_examples_weights(indexes, targets_covered_by_new_rule_in_set , PCR.mty_mul) # the true modification of the value
+        self.modify_examples_weights(indexes, targets_covered_by_new_rule_in_set , PCR.mty_mult) # the true modification of the value
         to_delete = [idx for idx in indexes if self.td_weights[idx] < self.eps_cov_weight_err_thld] # find the examples to delet
-        self.modify_examples_weights(to_delete, [0], PCR.mty_rep) #since these values are lower than the threshold we set them in zero
-
-        current_indexes = self.training_data.index.values.tolist() # we try to find if the examples still exist in the training set and were not deleted by other rule in the iteration
-        true_delete = [idx for idx in to_delete if idx in current_indexes] # we create a list the indexes that still exist and need to be deleted
-        logging.warning("true delete:{}".format(true_delete))
-        self.test_filtering(true_delete) # deleting the indexes
+        self.modify_examples_weights(to_delete, [0], PCR.mty_repl) #since these values are lower than the threshold we set them in zero
+        
+        self.__remove_covered_examples(to_delete) # deleting the indexes
         #self.__drop_zero_weight_examples(indexes)
 
 
@@ -414,37 +411,37 @@ class PCR:
             if manner ==  PCR.mty_add:
                 for index in indexes:
                     self.td_weights[index] += new_weights[0]
-            elif manner == PCR.mty_rep:
+            elif manner == PCR.mty_repl:
                 for index in indexes:
                     #print("i:{} len:{}".format(index, len(self.td_weights)))
                     self.td_weights[index] = new_weights[0]
             elif manner == PCR.mty_sub:
                 for index in indexes:
                     self.td_weights[index] -= new_weights[0]
-            elif manner == PCR.mty_mul:
+            elif manner == PCR.mty_mult:
                 for index in indexes:
                     self.td_weights[index] *= new_weights[0]
             else:
-                print("Indicated manner not found")
+                logging.warning("Indicated manner not found")
         elif (len(new_weights) == len(indexes)):
             #print("they are")
             if manner ==  PCR.mty_add:
                 for (index, replacement) in zip(indexes, new_weights):
                     self.td_weights[index] += replacement
-            elif manner == PCR.mty_rep:
-                print("Replacement")
+            elif manner == PCR.mty_repl:
+                logging.warning("Replacement")
                 for (index, replacement) in zip(indexes, new_weights):
                     self.td_weights[index] = replacement
             elif manner == PCR.mty_sub:
                 for (index, replacement) in zip(indexes, new_weights):
                     self.td_weights[index] -= replacement
-            elif manner == PCR.mty_mul:
+            elif manner == PCR.mty_mult:
                 for (index, replacement) in zip(indexes, new_weights):
                     self.td_weights[index] *= replacement
             else:
-                print("Indicated manner not found")
+                logging.warning("Indicated manner not found")
         else:
-            print("Arguments do not fulfill requirements")
+            logging.warning("Arguments do not fulfill requirements")
 
 #endregion
 
@@ -463,9 +460,8 @@ class PCR:
     def __calculate_search_heuristic(self,learning_set, rule_complex):
 
         rule_packed = {}
-        print("[rule_complex]:{}".format(rule_complex))
+        logging.warning("[rule_complex]:{}".format(rule_complex))
         covered_indexes = self.__find_covered_examples(learning_set, rule_complex)
-        print("|Covered|", covered_indexes)
         if covered_indexes:
             #print("COVERED:{}".format(covered_indexes))
             rule_coverage = self.__calculate_coverage(covered_indexes)
@@ -475,8 +471,17 @@ class PCR:
                 rule_distance = (self.__calculate_rule_distance(covered_indexes))
             else:
                 rule_distance = 0
+            if self.search_heuristic == PCR.srch_heu_CN2 or self.search_heuristic == PCR.srch_heu_other:
+                sh_value = ((self.alpha_coverage_hweight * rule_coverage)
+                            + (self.dispersion_off - rule_dispersion)
+                            + (self.gamma_dissimilarity_hweight * rule_dissimilarity)
+                            + (self.beta_distance_hweight * rule_distance))
+            elif self.search_heuristic == PCR.srch_heu_WRAcc:
+                sh_value = ((rule_coverage ** self.alpha_coverage_hweight)
+                            * (self.dispersion_off - rule_dispersion)
+                            * (rule_dissimilarity ** self.gamma_dissimilarity_hweight)
+                            * (rule_distance ** self.beta_distance_hweight))
 
-            sh_value = rule_coverage + (self.dispersion_off - rule_dispersion) + rule_dissimilarity + rule_distance
             logging.warning("COMPLEX:{}".format(rule_complex))
             logging.warning("COVERAGE:{}".format(rule_coverage))
             logging.warning("LEN COVERAGE:{}".format(len(covered_indexes)))
@@ -487,7 +492,6 @@ class PCR:
             logging.warning("sh_value:{}".format(sh_value))
             #cov_to_loop = copy.deepcopy(covered_indexes)
 
-
             rule_packed = {PCR.rl_antecedent: rule_complex, PCR.rl_srch_heu_value: sh_value, PCR.rl_classify_error: 1.0,
                            PCR.rl_accuracy: 0.0, PCR.rl_coverage: rule_coverage,
                            PCR.rl_prototype: rule_prototype, PCR.rl_new_weights:{}, PCR.rl_cov_idxs: covered_indexes,
@@ -495,9 +499,8 @@ class PCR:
 
             for target_attribute in self.target:
                 value = max(rule_prototype[target_attribute], key = rule_prototype[target_attribute].get)
-                print(target_attribute,":",value)
+                logging.warning("target attr:{}".format(target_attribute,value))
                 correct_covered = list((set(covered_indexes) & set(self.target_val_idxs[target_attribute][value])))
-                print("correct", correct_covered)
                 #print("correct", self.training_data.loc[correct_covered[0]])
                 for i in correct_covered:
                     rule_packed[PCR.rl_correct_cov][i]+=1.0
@@ -507,7 +510,7 @@ class PCR:
 
             #print("correct", rule_packed[PCR.correct_cov], "\n\n")
         return rule_packed
-    
+
     def __define_final_prototype(self,current_prototype):
         print("define final prototype")
 
@@ -533,7 +536,7 @@ class PCR:
                     false_positives = len(covered_by_rule) - len(true_positives)
                     false_negatives = len(covered_by_predicted) - len(true_positives)
                     true_negatives = (len(tdata)) - (false_positives + false_negatives + len(true_positives))
-                    print("FP:{} FN:{} TP:{} TN:{} length:{}".format(false_positives, false_negatives, len(true_positives), true_negatives,len(tdata)))
+                    logging.warning("FP:{} FN:{} TP:{} TN:{} length:{}".format(false_positives, false_negatives, len(true_positives), true_negatives,len(tdata)))
                     class_error = ((false_positives+false_negatives)/(len(tdata)))
                     class_error = self.attributes_weights[target_attribute]*class_error
                     accuracy =  ((len(true_positives))+true_negatives)/(len(tdata))
@@ -568,7 +571,7 @@ class PCR:
             if self.td_dtypes[col] == PCR.nominal:
                 freq = a_sample[col].value_counts()
                 rel_freq = freq / len(a_sample)
-                freq_col[col] = rel_freq.to_dict();
+                freq_col[col] = rel_freq.to_dict()
         return freq_col
 
     def __get_selectors(self, multi_direction):
@@ -653,7 +656,7 @@ class PCR:
             #jaccard_distance = (len(inter)/len(union))
             sum_jd += jaccard_distance
         total_jd = sum_jd/len(self.rule_set)
-        print("total_jd:{}".format(total_jd))
+        #print("total_jd:{}".format(total_jd))
         return total_jd
 #endregion
 
@@ -824,7 +827,7 @@ if __name__ == '__main__':
     ##print("Hola Python")
     titanic_data = data('titanic')
     #print("size::{}".format(len(titanic_data)))
-    logging.basicConfig(filename='titanicTest03.log',
+    logging.basicConfig(filename='multi-target.log',
                         filemode='w',
                         format='%(name)s - %(levelname)s - %(message)s')
 
@@ -845,11 +848,15 @@ if __name__ == '__main__':
 
     #print("Training Data: \n{}".format(training_data))
     #print(list(training_data.head(3).index))
-    target = ["survived"]
+    target = ["sex","class"]
     #target = ["Treatment"]
     #target = "Species"
 
-    PCR_instance = PCR(training_data, test_data, target)
+    PCR_instance = PCR(training_data,
+                       test_data,
+                       target,
+                       )
+
     PCR_instance.test_find_best_complex()
     #PCR_instance.test_specialization()
 
@@ -864,4 +871,4 @@ if __name__ == '__main__':
     #PCR_instance.test_modify_learning_set()
 
 
-#endregion 
+#endregion
