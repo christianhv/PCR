@@ -244,9 +244,11 @@ class PCR:
                     if new_heuristic_value>poorest_heuristic_value:
                         best_candidates.append(new_candidate)
                         best_candidates = sorted(best_candidates, key=itemgetter(PCR.rl_srch_heu_value), reverse=True)
-
+                        poorest_heuristic_value = best_candidates[-1][
+                            PCR.rl_srch_heu_value]
                         if len(best_candidates)>limit_best:
                             best_candidates.pop()
+
                 logging.warning("best candidate after popping")
                 for bx in best_candidates:
                     logging.warning("{}".format(bx[PCR.rl_antecedent], bx[PCR.rl_srch_heu_value]))
@@ -400,7 +402,7 @@ class PCR:
         self.modify_examples_weights(indexes, targets_covered_by_new_rule_in_set , PCR.mty_mult) # the true modification of the value
         to_delete = [idx for idx in indexes if self.td_weights[idx] < self.eps_cov_weight_err_thld] # find the examples to delet
         self.modify_examples_weights(to_delete, [0], PCR.mty_repl) #since these values are lower than the threshold we set them in zero
-        
+
         self.__remove_covered_examples(to_delete) # deleting the indexes
         #self.__drop_zero_weight_examples(indexes)
 

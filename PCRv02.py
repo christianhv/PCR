@@ -60,24 +60,24 @@ class PCR:
     mmthd_std_cov = "Standard-Covering"
 
     #region initializing PCR
-    def __init__(self,
-                 training_data,
-                 validation_data,
-                 test_data,
-                 target=[],
-                 target_weight=0.0,
-                 multi_direction=False,
-                 maximum_targets=2,
-                 search_heuristic="WRAcc",
-                 modifying_method="Standard-Covering",
-                 covering_err_weight = 0.0, #if zero the correct covered will be deleted
-                 covering_weight_threshold = 0.4,
-                 minimum_covered = 3,
-                 coverage_weight=2.0,
-                 distance_weight=0.0,
-                 dissimilarity_weight=1.0,
-                 maximize_heuristic_weight="coverage"  #Only used when the search_heuristic is other
-                ):
+    def __init__(
+        self,
+        training_data,
+        validation_data,
+        test_data,
+        target=[],
+        target_weight=0.0,
+        multi_direction=False,
+        maximum_targets=3,
+        search_heuristic="CN2",
+        modifying_method="Err-Weight-Covering",
+        covering_err_weight=0.0,  #if zero the correct covered will be deleted
+        covering_weight_threshold=0.4,
+        minimum_covered=3,
+        coverage_weight=2.0,
+        distance_weight=1.0,
+        dissimilarity_weight=1.0,
+    ):
         warnings.formatwarning = lambda msg, *args, **kwargs: f'{msg}\n'
 
         self.training_data = training_data.sort_index()
@@ -260,13 +260,13 @@ class PCR:
                                                  key=itemgetter(
                                                      PCR.rl_srch_heu_value),
                                                  reverse=True)
-
+                        poorest_heuristic_value = best_candidates[-1][PCR.rl_srch_heu_value]
                         if len(best_candidates) > limit_best:
                             best_candidates.pop()
                 logging.info("best candidate after popping")
                 for bx in best_candidates:
                     logging.info("{}".format(bx[PCR.rl_antecedent],bx[PCR.rl_srch_heu_value]))
-                
+
                 newstar_as_rule = sorted(newstar_as_rule,
                                          key=itemgetter(PCR.rl_srch_heu_value),
                                          reverse=True)
@@ -455,18 +455,22 @@ class PCR:
         logging.info("Multi Dir")
         stop_criterion = False
         sum_ruleset_errors = 0.0
-        poorest_ruleset_error = 1.0
-        best_rule = {}
+        highest_ruleset_classy_error = 1.0
+
         iterim = 0
         while not stop_criterion:
             logging.info("\n\n ### Starting or continuing #### \n")
             best_candidates = self.__find_candidate_rules(self.training_data)
-            poorest_iteration_error = 1.0
+            lowest_iter_classy_error = 1.0
+            best_rule = {}
             #find best of best candidates
             for best_candy in best_candidates:
                 logging.info(best_candy)
-                target_attributes = self.__get_target_attributes(best_candy[PCR.rl_prototype][1])
+                target_attributes = self.__get_target_attributes(
+                    best_candy[PCR.rl_prototype][1],
+                    max_targets=self.max_num_targets)
                 logging.info("{} => {}".format(best_candy[PCR.rl_antecedent], target_attributes))
+                
                 avg_error, consequent, target_errors = self.__calculate_classification_error(self.validation_data,
                                                                                              best_candy,
                                                                                              target_attributes)
@@ -477,25 +481,29 @@ class PCR:
                     best_candy[PCR.rl_consequent]=consequent
                     best_candy[PCR.rl_classify_error]=avg_error
                     self.__set_correct_tars_by_exmpl(best_candy, target_errors)
-                    if best_candy[PCR.rl_classify_error]< poorest_iteration_error:
+                    if best_candy[PCR.rl_classify_error]< lowest_iter_classy_error:
                         logging.info("best candidate")
                         best_rule = best_candy
-                        poorest_iteration_error = best_candy[PCR.rl_classify_error]
+                        lowest_iter_classy_error = best_candy[PCR.rl_classify_error]
 
             #Check if the best candidate is best than the worst in the rule set
-            if (best_rule[PCR.rl_classify_error] <= poorest_ruleset_error
-                    or best_rule[PCR.rl_classify_error] < error_threshold):
-                self.rule_set.append(best_rule)
-                self.rule_set = sorted(self.rule_set,
-                                       key=itemgetter(PCR.rl_classify_error),
-                                       reverse=False)
-                indexes_fweights = list(best_rule[PCR.rl_correct_cov].keys())
-                new_weights = list(best_rule[PCR.rl_correct_cov].values())
-                self.__set_new_weights_examples(indexes_fweights, new_weights)
-                #if the rule set is bigger than the limit we take off the worst
-                if len(self.rule_set) > limit_rule_set:
-                    self.rule_set.pop()
-                poorest_ruleset_error = self.rule_set[-1][PCR.rl_classify_error]
+            if best_rule:
+                if ((best_rule[PCR.rl_classify_error] <= highest_ruleset_classy_error
+                        or best_rule[PCR.rl_classify_error] < error_threshold)):
+                    self.rule_set.append(best_rule)
+                    self.rule_set = sorted(self.rule_set,
+                                           key=itemgetter(PCR.rl_classify_error),
+                                           reverse=False)
+
+                    self.__modify_learning_set(best_rule)
+                    #if the rule set is bigger than the limit we take off the worst
+                    if len(self.rule_set) > limit_rule_set:
+                        self.rule_set.pop()
+                    # we only take the poorest classification error after checking if there is
+                    # something to be removed
+                    highest_ruleset_classy_error = self.rule_set[-1][PCR.rl_classify_error]
+                else:
+                    stop_criterion = True
             else:
                 stop_criterion = True
 
@@ -508,6 +516,14 @@ class PCR:
                     rule[PCR.rl_antecedent], rule[PCR.rl_classify_error],
                     rule[PCR.rl_srch_heu_value], rule[PCR.rl_prototype]))
 
+    def __modify_learning_set(self, rule):
+        indexes_fweights = list(rule[PCR.rl_correct_cov].keys())
+        new_weights = list(rule[PCR.rl_correct_cov].values())
+        if self.modifying_method == PCR.mmthd_err_weight_cov:
+            self.__set_new_weights_examples(indexes_fweights, new_weights)
+        elif self.modifying_method == PCR.mmthd_std_cov:
+            logging.info("TO DELETE:{}".format(indexes_fweights))
+            self.__remove_covered_examples(indexes_fweights)
 
     def __remove_covered_examples(self, to_delete):
         current_indexes = self.training_data.index.values.tolist()  # we try to find if the examples still exist in the training set and were not deleted by other rule in the iteration
@@ -773,7 +789,7 @@ class PCR:
                 rule[PCR.rl_correct_cov][i] += 1.0
 
 
-    def __calculate_classification_error(self, tdata, rule, target_attrs,threshold=0.4):
+    def __calculate_classification_error(self, tdata, rule, target_attrs,threshold=0.35):
         #print("Calculate class error")
         rule_keys = list(rule[PCR.rl_antecedent].keys())  # making it more readable
         #check if target is in the rule
