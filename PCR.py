@@ -70,7 +70,7 @@ class PCR:
                  minimum_covered = 3,
                  coverage_weight=0.0,
                  distance_weight=0.0,
-                 dissimilarity_weight=0.0,
+                 dissimilarity_weight=.0,
                  maximize_heuristic_weight="coverage"  #Only used when the search_heuristic is other
                 ):
         warnings.formatwarning = lambda msg, *args, **kwargs: f'{msg}\n'
@@ -850,7 +850,7 @@ if __name__ == '__main__':
 
     #print("Training Data: \n{}".format(training_data))
     #print(list(training_data.head(3).index))
-    target = ["sex","class"]
+    target = ["sex"]
     #target = ["Treatment"]
     #target = "Species"
 
@@ -859,7 +859,7 @@ if __name__ == '__main__':
                        target,
                        )
 
-    #PCR_instance.test_find_best_complex()
+    PCR_instance.test_find_best_complex()
     #PCR_instance.test_specialization()
 
     #PCR_instance.test_delete()
