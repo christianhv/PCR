@@ -570,17 +570,15 @@ class PCR:
         return td_prototype
 
     def __define_final_prototype(self, complete_ptype, antecedent={}):
+        logging.info("prot: {} - ant: {}".format(complete_ptype, antecedent))
         final_prototype = {}
         rel_freq_ptyp = {}
         ptyp_attributes = list(complete_ptype.keys())
         antecdt_attributes = list(antecedent.keys())
-        ptyp_attributes = [
-            attr for attr in ptyp_attributes if attr not in antecdt_attributes
-        ]
+        ptyp_attributes = [attr for attr in ptyp_attributes if attr not in antecdt_attributes]
 
         for ptyp_attr in ptyp_attributes:
-            value = max(complete_ptype[ptyp_attr],
-                        key=complete_ptype[ptyp_attr].get)
+            value = max(complete_ptype[ptyp_attr],key=complete_ptype[ptyp_attr].get)
             final_prototype[ptyp_attr] = value
             rel_freq_ptyp[ptyp_attr] = complete_ptype[ptyp_attr][value]
 
