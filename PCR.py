@@ -280,7 +280,7 @@ class PCR:
                 empty_star = True
         return best_candidates
 
-    def train_model_CN2_std_covering(self, limit_rule_set=100, error_threshold=0.8, sorted_criterion=None):
+    def learning_decision_list(self, limit_rule_set=100, error_threshold=0.8, sorted_criterion=None):
         stop_criterion = True
         avg_rule_set_error= 1.00
         avg_list = []
@@ -295,7 +295,7 @@ class PCR:
                 best_cpx = best_candidates[0]
                 self.__calculate_rule_classify_error(self.training_data, best_cpx)
                 self.rule_set.append(best_cpx)
-                self.__modify_learning_setx(best_cpx)
+                self.__modify_learning_set(best_cpx)
             else:
                 stop_criterion = False
 
@@ -371,7 +371,7 @@ class PCR:
             new_worst = self.rule_set[-1][PCR.rl_classify_error]
 
             for rule in self.rule_set:
-                self.__modify_learning_setx(rule)
+                self.__modify_learning_set(rule)
 
             if new_worst == poorest_ruleset_error or self.training_data.empty:
                 stop_criterion = False
@@ -421,15 +421,11 @@ class PCR:
                     tp = len(tp)
                     predicted_values = [pred_val] * len(idxs_cov_by_rule)
                     actual_values = list(test_data.loc[idxs_cov_by_rule,target_attribute])
-                    logging.info("predicted values: {}".format(predicted_values))
-                    logging.info("actual values: {}".format(actual_values))
                     fp = len(predicted_values) - tp
-                    logging.info("tp: {}".format(tp))
                     tp_by_tar[target_attribute] += tp
                     fp_by_tar[target_attribute] += fp
                     accuracy = accuracy_score(actual_values, predicted_values)
                     sum_tar_acc += accuracy
-                    logging.info("accuracy: {}".format(accuracy))
 
                 rule_acc = sum_tar_acc/len(self.target)
                 test_data = test_data.drop(idxs_cov_by_rule)
@@ -442,12 +438,7 @@ class PCR:
         acc_sum_tar = 0.0
         for target_attribute in self.target:
             sumas_bot = tp_by_tar[target_attribute]+fp_by_tar[target_attribute]
-            logging.info(
-                "tp: {} fp: {} suma: {}".format(tp_by_tar[target_attribute],
-                                                fp_by_tar[target_attribute],
-                                                sumas_bot))
             accuracy = tp_by_tar[target_attribute]/sumas_bot
-            logging.info("accuracy: {}".format(accuracy))
             total_accuracy_by_tar[target_attribute]= accuracy
 
             acc_sum_tar+=accuracy
@@ -455,7 +446,6 @@ class PCR:
         all_acc = [dit[PCR.rl_accuracy] for dit in predicted_results if dit[PCR.rl_accuracy]>0.0]
         sum_acc = np.sum(all_acc)
         total_accuracy = sum_acc / len(all_acc)
-        logging.info("Total Accuracy: {}".format(total_accuracy))
 
 
         return predicted_results, total_accuracy, rule_set_accuracy
@@ -466,7 +456,7 @@ class PCR:
         logging.info(indexes)
 
 
-    def __modify_learning_setx(self, rule):
+    def __modify_learning_set(self, rule):
         indexes_fweights = list(rule[PCR.rl_correct_cov].keys())
         new_weights = list(rule[PCR.rl_correct_cov].values())
         if self.modifying_method == PCR.mmthd_err_weight_cov:
@@ -1020,7 +1010,7 @@ if __name__ == '__main__':
 
     PCR_xhv = PCR(training_data,test_data,target)
 
-    rule_set_list = PCR_xhv.train_model_CN2_std_covering()
+    rule_set_list = PCR_xhv.learning_decision_list()
 
     for rule in rule_set_list:
         print("rule: {} - {} - {} - {} - {}".format(
