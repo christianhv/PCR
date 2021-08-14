@@ -10,6 +10,7 @@ import pandas as pd
 from pandas.api.types import is_string_dtype
 from pandas.api.types import is_numeric_dtype
 from sklearn.metrics import accuracy_score
+from sklearn.metrics import confusion_matrix
 import operator
 import time
 from operator import itemgetter
@@ -30,7 +31,7 @@ class PCR:
     rl_new_weights = "new weights"
     rl_correct_cov = "correct_covered"
     rl_accuracy = "accuracy"
-    predicted = "predicted"
+    rl_predicted = "predicted"
 
     # modification types of examples weights
     mty_add = "add"
@@ -207,6 +208,16 @@ class PCR:
         #self.dispersion_off = self.__calculate_dispersion_of(self.training_data)[0]
         #setting the generic prototype
         self.td_prototype = self.__set_td_prototype()
+
+        self.generic_prediction = self.__define_final_prototype({},self.td_prototype)
+        self.generic_rule = {PCR.rl_antecedent:{}, PCR.rl_prototype: self.generic_prediction,
+                            PCR.rl_srch_heu_value: 0.0, PCR.rl_classify_error: 1.0,
+                            PCR.rl_accuracy: 0.0, PCR.rl_coverage: 0.0,
+                            PCR.rl_new_weights:{}, PCR.rl_cov_idxs: [0.0],
+                            PCR.rl_correct_cov:{0:0}}
+
+
+        logging.info("Generic rule: {} -> {}".format(self.generic_rule[PCR.rl_antecedent], self.generic_rule[PCR.rl_prototype][0]))
         self.rule_set = []
 
         # creating arrays of covered indexes by the targets.
@@ -269,7 +280,7 @@ class PCR:
                 empty_star = True
         return best_candidates
 
-    def train_model_CN2_std_covering(self, limit_rule_set=100, error_threshold=0.8, sorted_criterion="sort-cov"):
+    def train_model_CN2_std_covering(self, limit_rule_set=100, error_threshold=0.8, sorted_criterion=None):
         stop_criterion = True
         avg_rule_set_error= 1.00
         avg_list = []
@@ -293,17 +304,8 @@ class PCR:
 
             for rule in self.rule_set:
                 logging.info("antecedent: {} prototype: {} ".format(rule[PCR.rl_antecedent], rule[PCR.rl_prototype]))
-        if sorted_criterion == PCR.sort_criterion_cov:
-            self.rule_set = sorted(self.rule_set,
-                               key=itemgetter(PCR.rl_coverage),
-                               reverse=True)
-        elif sorted_criterion == PCR.sort_criterion_heu:
-            self.rule_set = sorted(self.rule_set,
-                                   key=itemgetter(PCR.rl_srch_heu_value),
-                                   reverse=True)
-        elif sorted_criterion == PCR.sort_criterion_error:
-            self.rule_set = sorted(self.rule_set,
-                                   key=itemgetter(PCR.rl_srch_heu_value))
+
+        self.rule_set.append(self.generic_rule)
         for rule in self.rule_set:
             logging.info('''- rule: {} \n 
                        prediction: {} \n
@@ -394,29 +396,69 @@ class PCR:
         logging.info(test_data)
         logging.info("###########################")
         logging.info("TEST ON ACC")
-        list_of_results = []
+        predicted_results = []
+        tp_by_tar = {t:0.0 for t in self.target}
+        fp_by_tar = {t:0.0 for t in self.target}
+        total_accuracy_by_tar = {t:0.0 for t in self.target}
         for rule in rule_set:
+            rule_acc = 0.0
+            idxs_cov_by_rule=0.0
             antecedent = rule[PCR.rl_antecedent]
-            idxs_cov_by_rule = self.__find_covered_examples(test_data, antecedent)
+            if antecedent:
+                idxs_cov_by_rule = self.__find_covered_examples(test_data, antecedent)
+            else:
+                idxs_cov_by_rule = list(test_data.index)
+
+            sum_tar_acc = 0.0
+
             if len(idxs_cov_by_rule)>0:
                 for target_attribute in self.target:
                     predicted_ = {}
-                    predicted_value = rule[PCR.rl_prototype][0][target_attribute]
-                    predicted_values = [predicted_value] * len(idxs_cov_by_rule)
-                    predicted_[target_attribute] = [predicted_value]
-                    actual_vals = list(test_data.loc[idxs_cov_by_rule,target_attribute])
-                    logging.info(actual_vals)
-                    logging.info(predicted_values)
-                    accuracy2 = accuracy_score(actual_vals, predicted_values)
-                    logging.info("accuracy 2: {}".format(accuracy2))
-                    logging.info("antecedent: {} predicted_: {}".format(antecedent, predicted_))
-                    idxs_cov_by_prediction = self.__find_covered_examples(test_data, predicted_)
-                    true_positives = list((set(idxs_cov_by_rule) & set(idxs_cov_by_prediction)))
-                    logging.info("true_positives: {}",format(true_positives))
-                    logging.info("acc: {}".format(len(true_positives)/len(idxs_cov_by_rule)))
-                    logging.info("idxs by antecedent: {} \n idxs by pre: {}".format(idxs_cov_by_rule, idxs_cov_by_prediction))
+                    pred_val = rule[PCR.rl_prototype][0][target_attribute]
+                    predicted_[target_attribute]=[pred_val]
+                    idx_predicted = self.__find_covered_examples(test_data, predicted_)
+                    tp = list(set(idxs_cov_by_rule) & set(idx_predicted))
+                    tp = len(tp)
+                    predicted_values = [pred_val] * len(idxs_cov_by_rule)
+                    actual_values = list(test_data.loc[idxs_cov_by_rule,target_attribute])
+                    logging.info("predicted values: {}".format(predicted_values))
+                    logging.info("actual values: {}".format(actual_values))
+                    fp = len(predicted_values) - tp
+                    logging.info("tp: {}".format(tp))
+                    tp_by_tar[target_attribute] += tp
+                    fp_by_tar[target_attribute] += fp
+                    accuracy = accuracy_score(actual_values, predicted_values)
+                    sum_tar_acc += accuracy
+                    logging.info("accuracy: {}".format(accuracy))
+
+                rule_acc = sum_tar_acc/len(self.target)
                 test_data = test_data.drop(idxs_cov_by_rule)
-        return total_predict, total_accuracy
+
+            rule_prediction = {PCR.rl_antecedent:antecedent,
+                               PCR.rl_predicted: rule[PCR.rl_prototype],
+                               PCR.rl_accuracy: rule_acc,
+                               PCR.rl_coverage: idxs_cov_by_rule}
+            predicted_results.append(rule_prediction)
+        acc_sum_tar = 0.0
+        for target_attribute in self.target:
+            sumas_bot = tp_by_tar[target_attribute]+fp_by_tar[target_attribute]
+            logging.info(
+                "tp: {} fp: {} suma: {}".format(tp_by_tar[target_attribute],
+                                                fp_by_tar[target_attribute],
+                                                sumas_bot))
+            accuracy = tp_by_tar[target_attribute]/sumas_bot
+            logging.info("accuracy: {}".format(accuracy))
+            total_accuracy_by_tar[target_attribute]= accuracy
+
+            acc_sum_tar+=accuracy
+        rule_set_accuracy = acc_sum_tar/len(self.target)
+        all_acc = [dit[PCR.rl_accuracy] for dit in predicted_results if dit[PCR.rl_accuracy]>0.0]
+        sum_acc = np.sum(all_acc)
+        total_accuracy = sum_acc / len(all_acc)
+        logging.info("Total Accuracy: {}".format(total_accuracy))
+
+
+        return predicted_results, total_accuracy, rule_set_accuracy
 
     def test_covered(self):
         komplex = {'sex': ['women']}
@@ -976,18 +1018,25 @@ if __name__ == '__main__':
     #target = ["Treatment"]
     #target = ["Species"]
 
-    PCR_xhv = PCR(training_data,
-                       test_data,
-                       target)
+    PCR_xhv = PCR(training_data,test_data,target)
 
-    rule_set_list = PCR_xhv.train_model_CN2_std_covering(sorted_criterion="sort-cov")
-    results, accuracy = PCR_xhv.test_PCR(rule_set_list, test_data)
-    print(accuracy)
+    rule_set_list = PCR_xhv.train_model_CN2_std_covering()
 
     for rule in rule_set_list:
-        print("rule: {} - {} - {} - {} ".format(rule["rule"], rule["coverage"],
-                                       rule["search_heuristic_value"],
-                                       rule["classification_error"]))
+        print("rule: {} - {} - {} - {} - {}".format(
+            rule["rule"], rule[PCR.rl_prototype][0], rule["coverage"],
+            rule["search_heuristic_value"], rule["classification_error"]))
+
+
+    results, accuracy, rl_acc = PCR_xhv.test_PCR(rule_set_list, test_data)
+
+
+    for result in results:
+        print(result)
+
+    print("total accuracy:{}".format(accuracy))
+    print("rule set acc: {}".format(rl_acc))
+
 
 
 
