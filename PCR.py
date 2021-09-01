@@ -7,10 +7,12 @@ from pydataset import data
 from math import log
 import numpy as np
 import pandas as pd
+import sklearn as scikit
 from pandas.api.types import is_string_dtype
 from pandas.api.types import is_numeric_dtype
 from sklearn.metrics import accuracy_score
 from sklearn.metrics import confusion_matrix
+from sklearn.model_selection import train_test_split
 import operator
 import time
 from operator import itemgetter
@@ -58,9 +60,9 @@ class PCR:
     mmthd_std_cov = "Standard-Covering"
 
     #sorted criterion
-    sort_criterion_cov = "sort-cov"
-    sort_criterion_heu = "sort-heu"
-    sort_criterion_error = "sort-error"
+    weight_cov = "sort-cov"
+    weight_heu = "sort-heu"
+    weight_error = "sort-error"
     #region initializing PCR
     def __init__(
         self,
@@ -83,11 +85,8 @@ class PCR:
         warnings.formatwarning = lambda msg, *args, **kwargs: f'{msg}\n'
 
         self.training_data = training_data.sort_index()
-        logging.warning(self.training_data.index)
         self.training_data = self.training_data.reset_index(drop=True)
-        logging.warning("SORTED:\n{}".format(self.training_data))
         self.test_data = test_data
-        logging.warning("TEST:\n{}".format(self.test_data))
 
         # Setting indexes of the training data
         self.all_td_indexes = self.training_data.index.values.tolist()
@@ -105,19 +104,6 @@ class PCR:
             self.no_target = 0.0
             self.max_num_targets = maximum_targets
             self.tau_target_weight = 0.0
-            if target_weight > 0:
-                logging.info('''
-                            | In multi-direction all attributes have the same weight         |
-                            | The weight provided is ignored                                 |''',
-                              stacklevel=2)
-            if (len(target)) > 0:
-                logging.info('''
-                            | If multi-direction=True, no target is taken into account       |
-                            | The number of targets will be automatically generated          |
-                            | Number of targets will differ by rule, until maximum           |
-                            | provided default=2                                             |
-                            | If you want to provide target change multi-direction to False  |''',
-                              stacklevel=2)
         else:
             if type(target) != list:
                 raise ValueError(
@@ -127,10 +113,6 @@ class PCR:
                 raise ValueError(
                     '<<If multi-direction=False Target must be provided>>')
             if target_weight == 0:
-                logging.info('''
-                            | It is recommended to give weight to target attributes.         |
-                            | Now assigning value 1 by default                               |
-                            ''')
                 self.tau_target_weight = 1.0
             else:
                 self.tau_target_weight = target_weight
@@ -142,23 +124,14 @@ class PCR:
         #All the weights need to tune the algorithm
         self.search_heuristic = heuristic_type
         if heuristic_type == PCR.heur_type_sum:
-            logging.info('''
-                            | In CN2 search heuristic, all heuristic weights are set to zero |
-                            | If you provide some arguments, they will be ignored            |
-                            | Pleaser try with "Other" to modify heuristic weights           |''',
-                          stacklevel=2)
+
 
             self.dispersion_off = 1.0
             self.alpha_coverage_hweight = coverage_weight
             self.beta_distance_hweight = distance_weight  #in original experiments is not used
             self.gamma_dissimilarity_hweight = dissimilarity_weight
         elif heuristic_type == PCR.heur_type_product:
-            logging.info('''
-                            | In WRAcc search heuristic the generic dispersion is used and   |
-                            | coverage weight is set to 1                                    |
-                            | If you provide some arguments, they will be ignored            |
-                            | Pleaser try with "Other" to modify heuristic weights           |''',
-                          stacklevel=2)
+
             self.dispersion_off = 0.0 ####==> dispersion for WRAcc is calculated below <===###
             self.alpha_coverage_hweight = 1.0
             self.beta_distance_hweight = 0.0  #in original experiments is not used
@@ -178,20 +151,7 @@ class PCR:
         self.maximal_number_of_rules = 100
 
         # Is it multi directional
-        logging.info("Multi direction:{}".format(multi_direction))
-        logging.info("Target:{} no._targets:{} max_no_targets:{}".format(
-            self.target, self.no_target, self.max_num_targets))
-        logging.info("Tau:{}".format(self.tau_target_weight))
 
-        logging.info("disp:{} cov:{} dist:{} diss:{} ".format(
-            self.dispersion_off,
-            self.alpha_coverage_hweight,
-            self.beta_distance_hweight,  #in original experiments is not used
-            self.gamma_dissimilarity_hweight))
-
-        logging.info("mod_methd:{} error_weight:{}  err_thld: {}".format(
-            self.modifying_method, self.zeta_covering_err_weight,
-            self.eps_cov_weight_err_thld))
 
         ### The structures below need some of the structures above
         # setting the weights
@@ -199,10 +159,9 @@ class PCR:
         self.attributes_weights = self.__set_default_attributes_weights()
         if heuristic_type == PCR.heur_type_product:
             self.dispersion_off = self.__calculate_dispersion_of(self.training_data)[0]
-            logging.info("disp Off:{}".format(self.dispersion_off))
 
         self.selectors = self.__get_selectors(multi_direction=False)
-        logging.warning("SELECTORS:{}".format(self.selectors))
+        logging.info("selector: {}".format(self.selectors))
         #setting the generic dispersion
         #we need the type of data and the column list
         #self.dispersion_off = self.__calculate_dispersion_of(self.training_data)[0]
@@ -217,7 +176,6 @@ class PCR:
                             PCR.rl_correct_cov:{0:0}}
 
 
-        logging.info("Generic rule: {} -> {}".format(self.generic_rule[PCR.rl_antecedent], self.generic_rule[PCR.rl_prototype][0]))
         self.rule_set = []
 
         # creating arrays of covered indexes by the targets.
@@ -233,10 +191,6 @@ class PCR:
                 #print(value,":idxs:",idxs)
             self.target_val_idxs[k] = temp2
 
-        logging.warning("target indexes by value")
-        logging.warning(self.target_val_idxs)
-        logging.warning("disp Off:{}".format(self.dispersion_off))
-        logging.warning("generic proto:{}".format(self.td_prototype))
 
 #endregion
 
@@ -248,8 +202,6 @@ class PCR:
         star = []
         while not empty_star:
             newstar = self.__specialize_complex(star)
-            logging.warning("newstar after specialization")
-            logging.warning(newstar)
             newstar_as_rule = []
             if newstar:
                 for komplex in newstar:
@@ -263,19 +215,12 @@ class PCR:
                             best_candidates.pop()
                         poorest_heuristic_value = best_candidates[-1][PCR.rl_srch_heu_value]
 
-                logging.warning("best candidate after popping")
-                for bx in best_candidates:
-                    logging.warning("{}".format(bx[PCR.rl_antecedent], bx[PCR.rl_srch_heu_value]))
                 newstar_as_rule = sorted(newstar_as_rule, key=itemgetter(PCR.rl_srch_heu_value), reverse=True)
                 newstar = [komplex[PCR.rl_antecedent] for komplex in newstar_as_rule]
                 newstar = newstar[0:limit_beam]
                 star = newstar
-                logging.warning("new star after popping")
-                logging.warning(newstar)
-                logging.warning("STAR")
-                logging.warning(star)
-                for komplex in newstar:
-                    logging.warning("newstar ele:{}".format(komplex))
+
+
             else:
                 empty_star = True
         return best_candidates
@@ -285,13 +230,10 @@ class PCR:
         avg_rule_set_error= 1.00
         avg_list = []
         while stop_criterion:
-            logging.info("Trying to Learn")
             best_candidates = self.__find_candidate_rules(self.training_data, limit_best=1)
             best_classify = 1.0
             best_cpx = {}
             if best_candidates:
-                for rule in best_candidates:
-                    logging.info("rule: {} sh: {} ".format(rule[PCR.rl_antecedent], rule[PCR.rl_srch_heu_value]))
                 best_cpx = best_candidates[0]
                 self.__calculate_rule_classify_error(self.training_data, best_cpx)
                 self.rule_set.append(best_cpx)
@@ -302,16 +244,9 @@ class PCR:
             if self.training_data.empty:
                 stop_criterion = False
 
-            for rule in self.rule_set:
-                logging.info("antecedent: {} prototype: {} ".format(rule[PCR.rl_antecedent], rule[PCR.rl_prototype]))
+
 
         self.rule_set.append(self.generic_rule)
-        for rule in self.rule_set:
-            logging.info('''- rule: {} \n 
-                       prediction: {} \n
-                       cov: {} \n 
-                       sh: {} '''.format(rule[PCR.rl_antecedent], rule[PCR.rl_prototype][0],
-                                         rule[PCR.rl_coverage], rule[PCR.rl_srch_heu_value]))
         return self.rule_set
 
 
@@ -328,12 +263,8 @@ class PCR:
                 if bc[PCR.rl_classify_error] < poorest_iteration_error:
                     best_rule = bc
                     poorest_iteration_error = bc[PCR.rl_classify_error]
-            logging.warning("BEST CANDIDATES")
-            for bc in best_candidates:
-                logging.warning("{} - {} - {} - pro:{}".format(bc[PCR.rl_antecedent], bc[PCR.rl_srch_heu_value], bc[PCR.rl_classify_error], bc[PCR.rl_prototype]))
 
-            logging.warning("compare: {} worst:{}".format(
-                best_rule[PCR.rl_classify_error], poorest_ruleset_error))
+
             #Check if the best candidate is best than the worst in the rule set
             if best_rule[PCR.rl_classify_error] < poorest_ruleset_error or best_rule[PCR.rl_classify_error]<error_threshold:
                 self.rule_set.append(best_rule)
@@ -351,10 +282,6 @@ class PCR:
             if self.training_data.empty :
                 stop_criterion = False
 
-            logging.warning("RULE SET")
-            for rule in self.rule_set:
-                logging.warning("{} - error:{} - sh:{} - pro:{}".format(rule[PCR.rl_antecedent], rule[PCR.rl_classify_error], rule[PCR.rl_srch_heu_value], rule[PCR.rl_prototype]))
-
     def test_find_best_complex_v02(self, limit_rule_set=5, error_threshold=0.4):
         stop_criterion = True
         poorest_ruleset_error = 1.0
@@ -362,7 +289,6 @@ class PCR:
             best_candidates = self.__find_candidate_rules(self.training_data,limit_best=8, limit_beam=12)
             for bc in best_candidates:
                 self.__calculate_rule_classify_error(self.test_data, bc)
-                logging.warning("V0.2 {} - {} - {} - pro:{}".format(bc[PCR.rl_antecedent], bc[PCR.rl_srch_heu_value], bc[PCR.rl_classify_error], bc[PCR.rl_prototype]))
 
             #Check if the best candidate is best than the worst in the rule set
             self.rule_set = [*self.rule_set, *best_candidates ]
@@ -378,12 +304,6 @@ class PCR:
 
             poorest_ruleset_error = new_worst
 
-            logging.warning("RULE SET")
-            for rule in self.rule_set:
-                logging.warning("{} - error:{} - sh:{} - pro:{}".format(rule[PCR.rl_antecedent],
-                                                                        rule[PCR.rl_classify_error],
-                                                                        rule[PCR.rl_srch_heu_value],
-                                                                        rule[PCR.rl_prototype]))
 
         self.rule_set = [rule for rule in self.rule_set if rule[PCR.rl_classify_error] < error_threshold]
 
@@ -393,9 +313,6 @@ class PCR:
             test_data = self.test_data
         total_predict = 0.0
         total_accuracy = 0.0
-        logging.info(test_data)
-        logging.info("###########################")
-        logging.info("TEST ON ACC")
         predicted_results = []
         tp_by_tar = {t:0.0 for t in self.target}
         fp_by_tar = {t:0.0 for t in self.target}
@@ -450,10 +367,59 @@ class PCR:
 
         return predicted_results, total_accuracy, rule_set_accuracy
 
+    def __classification_error(self, tdata, rule, weighted_criterion=None):
+        rule_set = self.rule_set.copy()
+        rule_set.append(rule)
+        vdata = tdata.copy()
+        if weighted_criterion != None:
+            rule_set = sorted(rule_set,key=itemgetter(PCR.rl_coverage),reverse=True)
+        rule_set.append(self.generic_rule)
+        correct_by_target = {k:0 for k in self.target}
+        wrong_by_target = {k: 0 for k in self.target}
+
+        for rule in rule_set:
+            rule_error = 0.0
+            idxs_cov_by_rule=0.0
+            antecedent = rule[PCR.rl_antecedent]
+            if antecedent:
+                if self.modifying_method == PCR.mmthd_std_cov:
+                    idxs_cov_by_rule = rule[PCR.rl_cov_idxs]
+                else:
+                    idxs_cov_by_rule = self.__find_covered_examples(vdata, antecedent)
+            else:
+                idxs_cov_by_rule = list(vdata.index)
+
+            if len(idxs_cov_by_rule)>0:
+                for target_attr in self.target:
+                    pred_val = rule[PCR.rl_prototype][0][target_attr]
+                    predicted_values = [pred_val] * len(idxs_cov_by_rule)
+                    actual_values = list(test_data.loc[idxs_cov_by_rule,target_attr])
+                    correct_cov, wrong_cov = self.get_difference_cov(predicted_values, actual_values)
+                    correct_by_target[target_attr]+= correct_cov
+                    wrong_by_target[target_attr]+= wrong_cov
+                vdata = vdata.drop(idxs_cov_by_rule)
+            tcl_error = 0.0
+            for target_attr in self.target:
+                sum_tar = correct_by_target[target_attr] + wrong_by_target[target_attr]
+                class_error = wrong_by_target[target_attr]/sum_tar
+                tcl_error+=class_error
+
+            tcl_error= tcl_error/self.no_target
+
+        return tcl_error
+
+    def get_difference_cov(self, l1, l2):
+        wrong = 0
+        for x, y in zip(l1, l2):
+            if x != y:
+                wrong+=1
+        correct = len(l1) - wrong
+        return correct, wrong
+
     def test_covered(self):
-        komplex = {'sex': ['women']}
+        komplex = {'marital_status': ['Divorced']}
         indexes = self.__find_covered_examples(self.training_data,komplex)
-        logging.info(indexes)
+        print("r",indexes)
 
 
     def __modify_learning_set(self, rule):
@@ -462,7 +428,6 @@ class PCR:
         if self.modifying_method == PCR.mmthd_err_weight_cov:
             self.__set_new_weights_examples(indexes_fweights, new_weights)
         elif self.modifying_method == PCR.mmthd_std_cov:
-            logging.info("TO DELETE:{}".format(indexes_fweights))
             self.__remove_covered_examples(indexes_fweights)
 
     def __remove_covered_examples(self, to_delete):
@@ -517,8 +482,7 @@ class PCR:
 #region Modify examples weights
     def __set_new_weights_examples(self, indexes, targets_covered_by_new_rule_in_set):
         modifier = [self.zeta_covering_err_weight - 1]*len(targets_covered_by_new_rule_in_set) #the covering weight times the length of the covered examples
-        logging.warning("MLS - covering weight:{}".format(self.zeta_covering_err_weight))
-        logging.warning("MLS - targets:{}".format(type(targets_covered_by_new_rule_in_set)))
+
         uno = [1]*len(targets_covered_by_new_rule_in_set) # a vector with ones times the length covered examples
         no_targets = [self.no_target] * len(targets_covered_by_new_rule_in_set) # vector with number of targets times the length of covered_examples
         targets_covered_by_new_rule_in_set = list(map(operator.truediv,targets_covered_by_new_rule_in_set, no_targets)) # divide all the covered targets in each example by the number of targets
@@ -596,7 +560,6 @@ class PCR:
             rule_dissimilarity = self.__calculate_dissimilarity(rule_prototype)
             prediction_prototype = self.__define_final_prototype(rule_complex,rule_prototype)
 
-            logging.info("prediction: {}".format(prediction_prototype))
             if len(self.rule_set):
                 rule_distance = (self.__calculate_rule_distance(covered_indexes))
             else:
@@ -614,14 +577,7 @@ class PCR:
                             * (rule_dissimilarity ** self.gamma_dissimilarity_hweight)
                             * (rule_distance ** self.beta_distance_hweight))
 
-            logging.warning("COMPLEX:{}".format(rule_complex))
-            logging.warning("COVERAGE:{}".format(rule_coverage))
-            logging.warning("LEN COVERAGE:{}".format(len(covered_indexes)))
-            logging.warning("DISPERSION:{}".format(rule_dispersion))
-            logging.warning("RULE PROTOTYPE:{}".format(rule_prototype))
-            logging.warning("DISSIMILARITY:{}".format(rule_dissimilarity))
-            logging.warning("DISTANCE:{}".format(rule_distance))
-            logging.warning("sh_value:{}".format(sh_value))
+
             #cov_to_loop = copy.deepcopy(covered_indexes)
 
             rule_packed = {PCR.rl_antecedent: rule_complex, PCR.rl_srch_heu_value: sh_value, PCR.rl_classify_error: 1.0,
@@ -631,7 +587,6 @@ class PCR:
 
             for target_attribute in self.target:
                 value = max(rule_prototype[target_attribute], key = rule_prototype[target_attribute].get)
-                logging.warning("target attr:{}".format(target_attribute,value))
                 correct_covered = list((set(covered_indexes) & set(self.target_val_idxs[target_attribute][value])))
                 #print("correct", self.training_data.loc[correct_covered[0]])
                 for i in correct_covered:
@@ -665,7 +620,6 @@ class PCR:
                     false_positives = len(covered_by_rule) - len(true_positives)
                     false_negatives = len(covered_by_predicted) - len(true_positives)
                     true_negatives = (len(tdata)) - (false_positives + false_negatives + len(true_positives))
-                    logging.warning("FP:{} FN:{} TP:{} TN:{} length:{}".format(false_positives, false_negatives, len(true_positives), true_negatives,len(tdata)))
                     class_error = ((false_positives+false_negatives)/(len(tdata)))
                     class_error = self.attributes_weights[target_attribute]*class_error
                     accuracy =  ((len(true_positives))+true_negatives)/(len(tdata))
@@ -711,7 +665,6 @@ class PCR:
             columns_to_selector = self.column_list
         else:
             columns_to_selector = [col for col in self.column_list if col not in self.target]
-        logging.info("cols:{}".format(columns_to_selector))
         for col in columns_to_selector:
             if self.td_dtypes[col] == PCR.nominal:
                 for attribute_value in self.global_unique_values[col]:
@@ -730,12 +683,7 @@ class PCR:
         rel_freq_ptyp = {}
         ptyp_attributes = list(current_prototype.keys())
         antecdt_attributes = list(antecedent.keys())
-        logging.info("\n ################################ Final prototype ################################ \n")
-        logging.info(ptyp_attributes)
-        logging.info(self.target)
         ptyp_attributes = [attr for attr in ptyp_attributes if attr in self.target]
-
-        logging.info("{} -> {}".format(antecdt_attributes,ptyp_attributes))
 
         for ptyp_attr in ptyp_attributes:
             value = max(current_prototype[ptyp_attr],
@@ -743,7 +691,6 @@ class PCR:
             final_prototype[ptyp_attr] = value
             rel_freq_ptyp[ptyp_attr] = current_prototype[ptyp_attr][value]
 
-        logging.info("final prototype: {}".format(final_prototype))
         packed_ptyp = [final_prototype, rel_freq_ptyp]
         return packed_ptyp
 #endregion
@@ -975,13 +922,57 @@ class PCR:
         return dispersion, rule_prototype
 #endregion
 
+def call_test_PCR(wh_dataset):
+
+
+    train, test = train_test_split(wh_dataset, test_size=0.2)
+
+    for col in train.columns:
+        sum_total_rule_sz= 0.00
+        sum_total_rls=0.0
+        sum_total_acc=0.0
+        sum_total_accrl = 0.0
+        for k in range(0,5) :
+            train, test = train_test_split(wh_dataset, test_size=0.2)
+            target = [col]
+            PCR_model = PCR(train, test, target)
+            rule_set_list = PCR_model.learning_decision_list()
+
+            sum_rule_size = 0.0
+            for rule in rule_set_list:
+                sum_rule_size += len(rule["rule"])
+
+            avg_size_rules = sum_rule_size / len(rule_set_list)
+            ruleset_size = len(rule_set_list)
+            results, accuracy, rl_acc = PCR_model.test_PCR(rule_set_list,test)
+
+            print(col)
+            print("avg_size rule", avg_size_rules, "rule set size", ruleset_size)
+            print("rule_set accuracy", rl_acc, "accuracy", accuracy)
+            logging.info("avg_rule_size".format(avg_size_rules))
+            print("\n")
+            sum_total_rule_sz += avg_size_rules
+            sum_total_rls += ruleset_size
+            sum_total_acc += accuracy
+            sum_total_accrl += rl_acc
+
+        rsz=sum_total_rule_sz/5
+        rlsz=sum_total_rls/5
+        accu=sum_total_acc/5
+        rlaccu=sum_total_accrl/5
+
+        print("col: {} rsz: {} rlsz: {} accu: {} rlaccu: {}".format(col, rsz, rlsz, accu, rlaccu))
+
+
+
+
 #region MAIN  to call PCR algorithm
 if __name__ == '__main__':
     ##print("Hola Python")
     titanic_data = data('titanic')
     #print("size::{}".format(len(titanic_data)))
     logging.basicConfig(
-        filename="Multi_tar.log",
+        filename="Multi_bike.log",
         filemode='w',
         format='%(asctime)s,%(msecs)d %(name)s %(levelname)s %(message)s',
         datefmt='%H:%M:%S',
@@ -991,7 +982,7 @@ if __name__ == '__main__':
     #temp_data = data('Arthritis')
     #temp_data = data('iris')
     print("size2::{}".format(len(temp_data)))
-    logging.warning("TODO: \n{}".format(temp_data))
+    #logging.warning("TODO: \n{}".format(temp_data))
     #al = [1,2]
     #logging.warning(temp_data.loc[al])
     training_data = titanic_data.sample(1000)
@@ -999,69 +990,46 @@ if __name__ == '__main__':
     #training_data = temp_data.sample(80)
     #training_data = training_data.loc[:,['Treatment','Sex',  'Age', 'Improved']]
     #test_data = temp_data.sample(50)
-    logging.warning(training_data)
+    #logging.warning(training_data)
 
 
     #print("Training Data: \n{}".format(training_data))
     #print(list(training_data.head(3).index))
-    target = ["survived"]
+    #target = ["survived"]
     #target = ["Treatment"]
     #target = ["Species"]
 
-    PCR_xhv = PCR(training_data,test_data,target)
-
-    rule_set_list = PCR_xhv.learning_decision_list()
-
-    for rule in rule_set_list:
-        print("rule: {} - {} - {} - {} - {}".format(
-            rule["rule"], rule[PCR.rl_prototype][0], rule["coverage"],
-            rule["search_heuristic_value"], rule["classification_error"]))
 
 
-    results, accuracy, rl_acc = PCR_xhv.test_PCR(rule_set_list, test_data)
+bike_buyers = pd.read_csv("bike_buyers_short.csv", sep=';')
+adult_data = pd.read_csv("adult_clean_cat.csv", sep=';')
+iris_data = pd.read_csv("iris.csv")
+#print(bike_buyers.info())
+print(adult_data.info())
+#print(adult_data.head())
+#print(iris_data.info())
+#print(iris_data.head())
+titanic_data = data('titanic')
+arti = data('Arthritis')
+arti.drop("ID", axis='columns', inplace=True)
+Age = pd.cut(arti['Age'], 5).astype(str)
+arti['Age'] = Age
+
+print(arti.info())
+
+#call_test_PCR(iris_data)
+#call_test_PCR(titanic_data)
+#call_test_PCR(bike_buyers)
+#call_test_PCR(adult_data)
+call_test_PCR(arti)
 
 
-    for result in results:
-        print(result)
-
-    print("total accuracy:{}".format(accuracy))
-    print("rule set acc: {}".format(rl_acc))
 
 
 
 
 
 
-#PCR_instance.test_find_best_complex()
-#PCR_instance.test_specialization()
 
-#PCR_instance.test_delete()
-#PCR_instance.train_model(3)
-#result = PCR_instance.fit_model()
 
-# PCR_instance.set_attribute_weight(target, 35)
-#lo = PCR_instance.target_val_idxs["survived"]["yes"][0:3]
-#PCR_instance.test_filtering(lo)
-#PCR_instance.train_model(5)
-#PCR_instance.test_modify_learning_set()
-'''
-    for col in titanic_data.columns:
-        sum_accuracy_col = 0.0
-        all_models = []
-        no_models = 1
-        for k in range (0,no_models):
-            training_data = titanic_data.sample(1000)
-            target= [col]
-            PCR_xhv = PCR(training_data, test_data, target)
-            rule_set_list = PCR_xhv.train_model_CN2_std_covering(sorted_criterion="sort-error")
-            all_models.append(rule_set_list)
-        print(col)
-        test_data = titanic_data.sample(500)
-        for rule_set_list in all_models:
-            results, accuracy = PCR_xhv.test_PCR(rule_set_list, test_data)
-            sum_accuracy_col += accuracy
-
-        attribute_accuracy = sum_accuracy_col / no_models
-        print("accuracy of {} : {}".format(col, accuracy))
-'''
 #endregion

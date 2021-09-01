@@ -208,7 +208,7 @@ class PCR:
         #setting the generic prototype
         self.td_prototype = self.__set_td_prototype()
         self.generic_prediction =  self.__define_final_prototype(self.td_prototype)[0]
-
+        
         self.rule_set = []
         logging.info("Generic Prediction: {}".format(self.generic_prediction))
         logging.info("generic proto: {}".format(self.td_prototype))
