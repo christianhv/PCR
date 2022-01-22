@@ -1350,7 +1350,7 @@ if __name__ == '__main__':
     print(housing_data.info())
     print(housing_data.head())
     '''
-    for _ in range(3):
+    for _ in range(5):
         call_multidirec(airline_data)
     '''
     for _ in range(5):
