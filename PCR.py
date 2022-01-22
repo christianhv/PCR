@@ -254,17 +254,17 @@ class PCR:
 
         while stop_criterion:
             candidate_rules = self.__find_candidate_rules(self.training_data, limit_best=8)
-            iter_classify_error = 1.0
+            bc_classify_error = 1.0
             best_candidate = {}
             if candidate_rules:
                 for b_candidate in candidate_rules:
                     classification_error = self.__classification_error(self.training_data, b_candidate)
-                    if classification_error < iter_classify_error:
+                    if classification_error < bc_classify_error:
                         best_candidate = b_candidate
-                        iter_classify_error = classification_error
-                if iter_classify_error < rule_set_error:
+                        bc_classify_error = classification_error
+                if bc_classify_error < rule_set_error:
                     self.rule_set.append(best_candidate)
-                    rule_set_error = iter_classify_error
+                    rule_set_error = bc_classify_error
                     self.__modify_learning_set(best_candidate)
                 else:
                     stop_criterion = False
@@ -434,12 +434,12 @@ class PCR:
         print("r", indexes)
 
     def __modify_learning_set(self, rule):
-        indexes_fweights = list(rule[PCR.rule_correct_covered].keys())
+        corr_covered_idxs = list(rule[PCR.rule_correct_covered].keys())
         new_weights = list(rule[PCR.rule_correct_covered].values())
         if self.modifying_method == PCR.mmthd_err_weight_cov:
-            self.__set_new_weights_examples(indexes_fweights, new_weights)
+            self.__set_new_weights_examples(corr_covered_idxs, new_weights)
         elif self.modifying_method == PCR.mmthd_std_cov:
-            self.__remove_covered_examples(indexes_fweights)
+            self.__remove_covered_examples(corr_covered_idxs)
 
     def __remove_covered_examples(self, to_delete):
         current_indexes = self.training_data.index.values.tolist()  # we try to find if the examples still exist in the training set and were not deleted by other rule in the iteration
@@ -1353,19 +1353,19 @@ if __name__ == '__main__':
     for _ in range(3):
         call_multidirec(airline_data)
     '''
-    for _ in range(3):
+    for _ in range(5):
         call_multidirec(titanic_data)
         
     
-    for _ in range(3):
+    for _ in range(5):
         call_multidirec(iris_data)
     
       
-    for _ in range(3):
+    for _ in range(5):
         call_multidirec(arthritis_data)
     
 
-    for _ in range(2):
+    for _ in range(5):
         call_multidirec(airline_data)
         
     for _ in range(5):
@@ -1375,16 +1375,16 @@ if __name__ == '__main__':
         call_multidirec(tictactoe_data)
 
       
-    for _ in range(2):
+    for _ in range(5):
         call_multidirec(voteincome_data)
 
-    for _ in range(2):
+    for _ in range(5):
         call_multidirec(tobacco_data)
 
-    for _ in range(2):
+    for _ in range(5):
         call_multidirec(housing_data)
 
-    for _ in range(2):
+    for _ in range(5):
         call_multidirec(purchased_bike_data)
     '''
     
