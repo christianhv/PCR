@@ -78,7 +78,7 @@ class PCR:
         distance_weight=1.0,
         dissimilarity_weight=1.0,
     ):
-        warnings.formatwarning = lambda msg, *args, **kwargs: f'{msg}\n'
+        #warnings.formatwarning = lambda msg, *args, **kwargs: f'{msg} \n'
 
         self.training_data = training_data.sort_index()
         logging.info(self.training_data.index)
